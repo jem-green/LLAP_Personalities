@@ -1,4 +1,5 @@
 # LLAP Personalities
 Lightweight Local Automation Protocol Personalities
-* LLAP Heartbeat
+* LLAP Heartbeat - Send heartbeats
+* LLAP Power - Power monitor
 
