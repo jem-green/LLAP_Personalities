@@ -18,7 +18,7 @@
 #define HEARTBEATINTERVAL 60000           // time in ms beween heatbeats so 60 seconds
 #define EEPROM_CYCLE_MODE_ADDRESS 502     // Addrees where the single byte CYCLE is stored 
 #define EEPROM_INTERVAL_ADDRESS 503       // Address where the four byte interval is stored 
-#define EEPROM_INTERVAL_UNITS_ADDRESS 507  // Address where the single char UNITS is stored 
+#define EEPROM_INTERVAL_UNITS_ADDRESS 507 // Address where the single char UNITS is stored 
 #define EEPROM_WAKE_COUNTER_ADDRESS 508   // Address where the double byte WAKEC is stored
 #define EEPROM_RETRY_COUNTER_ADDRESS 510  // Address where the double byte RETRIES is stored
 
@@ -37,15 +37,14 @@ enum class State
   Sleeping = 8,
   Updating = 9,
   Woken = 10,
-  Messaging = 11
 };
 
 //
 
 char deviceId[2];                     // The device Id
-byte battc = 9;			              // Set the initial counter to 9 so will do battery next as count in incremented first
-boolean cycling = false;              // Indicated that cycling
-int interval = 0;                     // number of intervals in the chosen units T - Miliseconds, S - Seconds, M - Minutes, H - Hours, D - Days
+byte battc = 9;			                  // Set the initial counter to 9 so will do battery next as count in incremented first
+boolean cycling = false;              // Indicate that cycling
+int interval = 0;                     // number of intervals in the chosen units T - Miliseconds, S - Seconds, M - Minutes, H - Hours, D - Days, X - Not defined
 char units = 'X';                     // period units
 State deviceState = State::Unknown;   // device state
 unsigned long previousMillis = 0;     // timeout comparator
@@ -53,14 +52,16 @@ unsigned long timeout = 0;            // could be large 999 days!!!! but unsigne
 int retry = 0;                        // retry counter for start messages
 int retries = 0;                      // The number of started messages to additionally send
 int wakeCounter = 0;                  // The number of messages sent before a wake + battery
+double voltage = 0;                   // The battey voltage
+bool woken = false;                   // Indicate that woken
 
 // Device data, this can be storred in program memory
 
-const String deviceName PROGMEM = "HEARTBEAT";  // The Device friendly name
-const String deviceType PROGMEM = "HRTBT001";   // The user defined device type
+const char deviceName[] PROGMEM = "HEARTBEAT";  // The Device friendly name
+const char deviceType[] PROGMEM = "HRTBT001";   // The user defined device type
 const int version PROGMEM = 100;                // LLAP version
 const int firmware PROGMEM = 100;               // Manufacturer firmware version
-const String serialNumber PROGMEM = "123456";   // Device Serial Number
+const char serialNumber[] PROGMEM = "123456";   // Device Serial Number
 
 // Instantiate the Serial and sleeper classes
 
@@ -81,7 +82,7 @@ void setup() {
 
   deviceState = State::Unknown;
 
-  Serial.begin(115200);
+  Serial.begin(9600);
 
   pinMode(8, OUTPUT);               // initialize pin 8 to control the radio
   digitalWrite(8, HIGH);            // select the radio
@@ -98,8 +99,10 @@ void setup() {
   units = loadIntervalUnits();      // Recover the messaging interval units default to 'X' none
   retries = loadRetries();          // Recover the retries or default to 5
   wakeCounter = loadWakeCounter();  // Recover the wake counter or defaults to 10
-  cycling = loadCycleMode();        // Recover the cycle mode 1 = cycling, 0 = not
-
+  if (interval > 0)                 // Check if interval is set so that we dont go into sleep
+  {
+    cycling = loadCycleMode();      // Recover the cycle mode 1 = cycling, 0 = not
+  }
   int retry = 0;                    // Initialise the retry count for the starting sequence
   LLAP.sendMessage(F("STARTED"));   // This needs to loop 5 times more, but leave this to the looping sequence
   timeout = 100;                    // Set the timeout interval between STARTED waiting for ACK
@@ -109,7 +112,6 @@ void setup() {
   if (cycling == true)
   {
     // I prefer this to continuing to send started's as goes straight into sleep
-    LLAP.sendMessage(F("SLEEPING"));
     deviceState = State::Sleeping;  // Now sleeping
   }
 
@@ -129,6 +131,7 @@ void setup() {
 // PANID - Change PANID
 // REBOOT - Restart the device
 // SER - Serial number
+// SLEEP - Activate sleep, the device will wake after the specified interval
 // WAKE - Wake from sleep
 
 void loop() {
@@ -176,446 +179,592 @@ void loop() {
       {
         // Go into a deep sleep
         // if the sleep is beyond 2^16 = 65536 miliseconds = 1 minute then will need multiple loops
-        if (interval > 0) {
-          //LLAP.sendMessage(F("AWAKE0")); // Message to say now awake
-          unsigned long intervalMillis = getIntervalMillis(interval, units);
-          if (intervalMillis > 60000) {
-            long iterations = intervalMillis / 60000;
+        if (timeout > 0) {
+          if (timeout > 60000)
+          {
+            long iterations = timeout / 60000;
             for (long i = 0; i < iterations; i++)
             {
               sleeper.sleepForaWhile(60000);
-              LLAP.sendMessage(F("AWAKE1")); // send back error status
             }
+            sleeper.sleepForaWhile(timeout - iterations * 60000); // Adjust for any remainder
           }
-          else {
-            sleeper.sleepForaWhile(intervalMillis);
-            //LLAP.sendMessage(F("AWAKE2")); // Message to say now awake 
+          else
+          {
+            sleeper.sleepForaWhile(timeout);
           }
           deviceState = State::Updating;
+        }
+        else
+        {
+          deviceState = State::Initiated;
         }
         break;
       }
     case State::Updating:
       {
-        //LLAP.sendInt("UPDATING",(int)cycling); // Message to say now awake 
-        if (cycling == true) {
+        if (cycling == true)
+        {
           battc++;
           if (battc >= wakeCounter) {                       // is it time to send a battery reading
             battc = 0;                                      // restart the counter
-            LLAP.sendMessage(F("AWAKE"));                   // Message to say now awake
-            LLAP.sendIntWithDP("BATT", int(readVcc()), 3);  // read the battery voltage and send
-            deviceState = State::Woken;                      //
-            timeout = 100;                                  // Enter the response loop allowing 100 ms to check for interruptions 
-            previousMillis = millis();                      // Enable monitoring to occur for serial events
+            voltage = readVcc();                            // read the battery voltage
+            LLAP.sendMessage(F("AWAKE"));                   // send back error status
+            LLAP.sendIntWithDP("BATT", int(voltage), 3);    // send
+            if (voltage < 1.2) {                            // Assume that this is the lowest voltage we can goto
+              LLAP.sendMessage(F("BATTLOW"));               // Message to say low battery
+            }
+            deviceState = State::Woken;                     //
           }
           else
           {
-        		timeout = getIntervalMillis(interval,units);    // reset the timeout just-in-case
-            deviceState = State::Messaging;                 // Now back to messaging
+            timeout = getIntervalMillis(interval, units);   // reset the timeout just-in-case
+            deviceState = State::Initiated;                  // Now back to sleeping
           }
+        }
+        else
+        {
+          LLAP.sendMessage(F("AWAKE"));                   // send back error status
+          timeout = getIntervalMillis(interval, units);     // reset the timeout just-in-case
+          deviceState = State::Initiated;                   // This was to fix a problem when cycling was true and interval was zero
         }
         break;
       }
-      default:
+    case State::Woken:
+      {
+        timeout = 100;                                      // Enter the response loop allowing 100 ms to check for interruptions
+        previousMillis = millis();                          // Enable monitoring to occur for serial events
+        deviceState = State::Initiated;                     //
+        woken = true;                                       // Indiacte that woken
+      }
+    default:  // Initiated
+      {
+        if (LLAP.bMsgReceived == true)   // Check if there is a message
         {
-          if (LLAP.bMsgReceived == true)   // Check if there is a message
+          if (strncmp_P(LLAP.sMessage.c_str(), PSTR("APVER"), 5) == 0) // LLAP version always 1.0
           {
-            if (strncmp_P(LLAP.sMessage.c_str(), PSTR("APVER"), 5) == 0) // LLAP version always 1.0
-            {
-              LLAP.sendIntWithDP("APVER", version, 2);
-              LLAP.bMsgReceived = false;
-            }
-            else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("BATT"), 4) == 0) // Battery voltage
-            {
-              LLAP.sendIntWithDP("BATT", int(readVcc()), 3);   // read the battery voltage and send
-              LLAP.bMsgReceived = false;
-            }
-            else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("CHDEVID"), 7) == 0) // Change the DEVICEID
-            {
-              // The specification implies the the DEVICEID doesnt get used until a reboot.
-              // So update the EEPROM with the new ID but don't apply until the reboot has occured.
+            // APVER------
+            // 0123456789 
+            LLAP.sendIntWithDP("APVER", version, 2);
+            LLAP.bMsgReceived = false;
+          }
+          else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("BATT"), 4) == 0) // Battery voltage
+          {
+            // BATT------
+            // 0123456789 
+            voltage = readVcc();
+            LLAP.sendIntWithDP("BATT", int(voltage), 3);   // read the battery voltage and send
+            LLAP.bMsgReceived = false;
+          }
+          else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("CHDEVID"), 7) == 0) // Change the DEVICEID
+          {
+            // The specification implies the the DEVICEID doesnt get used until a reboot.
+            // So update the EEPROM with the new ID but don't apply until the reboot has occured.
+            // CHDEVIDnn-
+            // 0123456789 
 
-              if (strchr_P(PSTR("-#@?\\*ABCDEFGHIJKLMNOPQRSTUVWXYZ"), LLAP.sMessage.c_str()[7]) != 0 && strchr_P(PSTR("-#@?\\*ABCDEFGHIJKLMNOPQRSTUVWXYZ"), LLAP.sMessage.c_str()[8]) != 0)
-              {
-                char tempId[2];
-                tempId[0] = LLAP.sMessage[7];
-                tempId[1] = LLAP.sMessage[8];
-                saveDeviceId(tempId);
-                LLAP.sendMessage("CHDEVID", tempId); // echo back the message
-              }
-              else
-              {
-                LLAP.sendMessage(F("ERRROR001")); // echo beck the instruction
-              }
-              LLAP.bMsgReceived = false;
-            }
-            else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("CYCLE"), 5) == 0) // Matches using program memory
+            if (strchr_P(PSTR("-#@?\\*ABCDEFGHIJKLMNOPQRSTUVWXYZ"), LLAP.sMessage.c_str()[7]) != 0 && strchr_P(PSTR("-#@?\\*ABCDEFGHIJKLMNOPQRSTUVWXYZ"), LLAP.sMessage.c_str()[8]) != 0)
             {
-              // Enter cycle mode
+              char tempId[2];
+              tempId[0] = LLAP.sMessage[7];
+              tempId[1] = LLAP.sMessage[8];
+              saveDeviceId(tempId);
+              LLAP.sendMessage("CHDEVID",tempId); // echo back the message
+            }
+            else
+            {
+              LLAP.sendMessage(F("ERRROR001")); // echo beck the instruction
+            }
+            LLAP.bMsgReceived = false;
+          }
+          else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("CYCLE"), 5) == 0) // Matches using program memory
+          {
+            // CYCLE-----
+            // 0123456789 
+            // Enter cycle mode
+            cycling = false;
+            if (interval > 0) // Stop going into sleep if interval = 0
+            {
+              // Indicate that not awake
+              woken = false;
               cycling = true;
               saveCycleMode(cycling);
               deviceState = State::Sleeping;
-              LLAP.sendMessage(F("CYCLE")); // echo beck the instruction
-              LLAP.bMsgReceived = false;
+              timeout = getIntervalMillis(interval, units);
             }
-            else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("DEVNAME"), 7) == 0) // Device name
-            {
-              LLAP.sendMessage(deviceName); // echo beck the device friendly name
-              LLAP.bMsgReceived = false;
-            }
-            else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("DEVTYPE"), 7) == 0) // Device type
-            {
-              LLAP.sendMessage(deviceType); // echo beck the device friendly type
-              LLAP.bMsgReceived = false;
-            }
-            else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("FVER"), 4) == 0) // manufacturer firmware version
-            {
-              LLAP.sendIntWithDP("FVER", firmware, 2);
-              LLAP.bMsgReceived = false;
-            }
-            else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("HELLO"), 5) == 0) // Ping Message respond back
-            {
-              LLAP.sendMessage(F("HELLO")); // echo beck the instruction
-              LLAP.bMsgReceived = false;
-            }
-            else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("INTVL"), 5) == 0) // Specify the messaging interval
-            {
-              // need to do some better checks here, padding problems etc
+            LLAP.sendMessage(F("CYCLE")); // echo beck the instruction
+            LLAP.bMsgReceived = false;
+          }
+          else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("DEVNAME"), 7) == 0) // Device name
+          {
+            // DEVNAME---
+            // 0123456789 
+            LLAP.sendMessage(deviceName); // echo beck the device friendly name
+            LLAP.bMsgReceived = false;
+          }
+          else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("DEVTYPE"), 7) == 0) // Device type
+          {
+            // DEVTYPE---
+            // 0123456789 
+            LLAP.sendMessage(deviceType); // echo beck the device friendly type
+            LLAP.bMsgReceived = false;
+          }
+          else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("FVER"), 4) == 0) // manufacturer firmware version
+          {
+            // FVER------
+            // 0123456789 
+            LLAP.sendIntWithDP("FVER", firmware, 2);
+            LLAP.bMsgReceived = false;
+          }
+          else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("HELLO"), 5) == 0) // Ping Message respond back
+          {
+            // HELLO-----
+            // 0123456789 
+            LLAP.sendMessage(F("HELLO")); // echo beck the instruction
+            LLAP.bMsgReceived = false;
+          }
+          else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("INTVL"), 5) == 0) // Specify the messaging interval
+          {
+            // INTVL-----
+            // INTVLnnna-
+            // 0123456789 
+            
+            if (LLAP.sMessage.c_str()[5] != 45) {
+              int sleepInterval = 0;
+              char sleepUnits = 'X';
               int digit;
-              interval = 0;
+              if (strchr_P(PSTR("TSMHDX"), LLAP.sMessage.c_str()[8]) != 0) {
+                sleepUnits = LLAP.sMessage.c_str()[8];
+              }
               for (byte i = 5; i < 8; i++) {
                 digit = (int)LLAP.sMessage.c_str()[i] - 48;
                 if ((digit < 0) || (digit > 9)) {
                   digit = 0;
                 }
-                interval = 10 * interval + digit;
+                sleepInterval = 10 * sleepInterval + digit;
               }
-              if (strchr_P(PSTR("TSMHDX"), LLAP.sMessage.c_str()[8]) != 0) {
-                units = LLAP.sMessage.c_str()[8];
-              }
-              saveInterval(interval);
-              saveIntervalUnits(units);
-              timeout = getIntervalMillis(interval, units);
+              saveInterval(sleepInterval);
+              saveIntervalUnits(sleepUnits);
+            }
+            
+            // Echo back
+            interval = loadInterval();
+            units = loadIntervalUnits();
+            timeout = getIntervalMillis(interval, units);
               // Echo back
               LLAP.sendInt("INTVL", interval); // echo back the instruction
-              LLAP.bMsgReceived = false;
-            }
-            else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("REBOOT"), 6) == 0) // Tell arduino to reboot, use the watchdog to do this
-            {
-              //wdt_enable(WDTO_60MS);
-              // wait for the prescaller time to expire
-              // without sending the reset signal by using
-              // the wdt_reset() method
-              //while (1) {}
-              asm volatile ( "jmp 0");
-              LLAP.sendMessage(F("REBOOT"));
-            }
-            else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("RETRIES"), 7) == 0) // Set the started retry count
-            {
-              // need to do some better checks here, padding problems etc
+            previousMillis = millis();        // Set the initial values
+            LLAP.bMsgReceived = false;
+          }
+          else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("REBOOT"), 6) == 0) // Tell arduino to reboot, use the watchdog to do this
+          {
+            // REBOOT----
+            // 0123456789 
+            //wdt_enable(WDTO_60MS);
+            // wait for the prescaller time to expire
+            // without sending the reset signal by using
+            // the wdt_reset() method
+            //while (1) {}
+            LLAP.sendMessage(F("REBOOT"));
+            asm volatile ( "jmp 0");
+
+          }
+          else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("RETRIES"), 7) == 0) // Set the started retry count
+          {
+            // need to do some better checks here, padding problems etc
+            // RETRIES---
+            // RETRIESnnn
+            // 0123456789 
+            //
+            if (LLAP.sMessage.c_str()[7] != 45) {
               int digit;
-              retries = 0;
+              int startedRetries = 0;
               for (byte i = 7; i < 9; i++) {
                 digit = (int)LLAP.sMessage.c_str()[i] - 48;
                 if ((digit < 0) || (digit > 9)) {
                   digit = 0;
                 }
-                retries = 10 * retries + digit;
+                startedRetries = 10 * startedRetries + digit;
               }
-              saveRetries(retries);
+              saveRetries(startedRetries);
+            }
+            retries = loadRetries();
               LLAP.sendInt("RETRIES", retries);
-              LLAP.bMsgReceived = false;
-            }
-            else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("SER"), 3) == 0) // Get the device serial number
-            {
-              LLAP.sendMessage(serialNumber);
-              LLAP.bMsgReceived = false;
-            }
-            else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("WAKEC"), 5) == 0) // Wake from the sleep cycle
-            {
+            LLAP.bMsgReceived = false;
+          }
+          else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("SER"), 3) == 0) // Get the device serial number
+          {
+            // SER-------
+            // SERnnnnn
+            // 0123456789 
+            LLAP.sendMessage("SER", serialNumber);
+            LLAP.bMsgReceived = false;
+          }
+          else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("SLEEP"), 5) == 0) // Check if SLEEP command
+          {
+            // SLEEP-----
+            // SLEEPnnna-
+            // 0123456789 
+             
+            if (LLAP.sMessage.c_str()[7] != 45) {
+              // need to do some better checks here, padding problems etc
               int digit;
-              wakeCounter = 0;
+              int sleepInterval = 0;
+              char sleepUnits = 'X';
               for (byte i = 5; i < 8; i++) {
                 digit = (int)LLAP.sMessage.c_str()[i] - 48;
                 if ((digit < 0) || (digit > 9)) {
                   digit = 0;
                 }
-                wakeCounter = 10 * wakeCounter + digit;
+                sleepInterval = 10 * sleepInterval + digit;
               }
-              // Store this in the EEPROM
-              saveWakeCounter(wakeCounter);
-              LLAP.sendInt("WAKEC", wakeCounter); // echo back the instruction
-              LLAP.bMsgReceived = false;
+              if (strchr_P(PSTR("TSMHDX"), LLAP.sMessage.c_str()[8]) != 0) {
+                sleepUnits = LLAP.sMessage.c_str()[8];
+              }          
+              timeout = getIntervalMillis(sleepInterval, sleepUnits);
+              if (timeout > 0) {
+                // Echo back
+                LLAP.sendMessage(F("SLEEP")); // echo back the instruction
+                deviceState = State::Sleeping;
+                LLAP.sendMessage(F("SLEEPING")); // echo back the instruction
+              }
             }
-            else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("WAKE"), 4) == 0) // Wake from the sleep cycle
-            {
-              cycling = false;
-              // Store this in the EEPROM
-              saveCycleMode(cycling);
-              LLAP.sendMessage(F("WAKE")); // echo back the instruction
-              LLAP.bMsgReceived = false;
-              timeout = getIntervalMillis(interval, units);
-              deviceState = State::Initiated;
-            }
-            else  // Any other commands send an error back
-            {
-              // Echo back
-              LLAP.sendMessage(F("ERRROR999")); // send back error status
-              LLAP.bMsgReceived = false;
-            }
+            LLAP.bMsgReceived = false;
           }
-          else
+          else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("WAKEC"), 5) == 0) // Wake from the sleep cycle
           {
-            // check if a message needs to be sent
-            if (timeout > 0) {
-              unsigned long currentMillis = millis();
-              if (currentMillis - previousMillis >= timeout) {
-                LLAP.sendMessage(F("HEARTBEAT")); // send a message
-                previousMillis = currentMillis;
-              
-                if (cycling == true){
-                  if (deviceState == State::Woken) { // check if cycling              
-                    LLAP.sendMessage(F("SLEEPING")); // echo beck the instruction
-                  }
-                  timeout = getIntervalMillis(interval, units); // reset the timeout
-                  deviceState = State::Sleeping;
+            // WAKEC-----
+            // WAKECnnn--
+            // 0123456789 
+            if (LLAP.sMessage.c_str()[7] != 45) {
+              int digit;
+              int counter = 0;
+              for (byte i = 5; i < 8; i++) {
+                digit = (int)LLAP.sMessage.c_str()[i] - 48;
+                if ((digit < 0) || (digit > 9)) {
+                  digit = 0;
                 }
-                previousMillis = currentMillis;
+                counter = 10 * counter + digit;
               }
+              // Store this in the EEPROM
+              saveWakeCounter(counter);
+            }
+            wakeCounter = loadWakeCounter();
+              LLAP.sendInt("WAKEC", wakeCounter); // echo back the instruction
+            LLAP.bMsgReceived = false;
+          }
+          else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("WAKE"), 4) == 0) // Wake from the sleep cycle
+          {
+            // WAKE------
+            // 0123456789 
+            cycling = false;
+            // Store this in the EEPROM
+            saveCycleMode(cycling);
+            LLAP.sendMessage(F("WAKE")); // echo back the instruction
+            LLAP.bMsgReceived = false;
+            timeout = getIntervalMillis(interval, units);
+            deviceState = State::Initiated;
+          }
+          else  // Any other commands send an error back
+          {
+            // Echo back
+            LLAP.sendMessage(F("ERRROR999")); // send back error status
+            LLAP.bMsgReceived = false;
+          }
+        }
+        else
+        {
+          // check if a message needs to be sent
+          if (timeout > 0) {
+            unsigned long currentMillis = millis();
+            if (currentMillis - previousMillis >= timeout) {
+              LLAP.sendMessage(F("HELLO")); // send a message
+              previousMillis = currentMillis;
+
+              if (cycling == true) {
+                timeout = getIntervalMillis(interval, units); // reset the timeout
+                if (woken == true)
+                {
+                  woken = false;
+                  LLAP.sendMessage(F("SLEEPING")); // send a message
+                }
+                deviceState = State::Sleeping;
+                
+              }
+              previousMillis = currentMillis;
             }
           }
-          break;
         }
+        break;
       }
   }
+}
 
-  /**
-     readVcc
-     Reads the battery/power voltage
-     Code from https://code.google.com/p/tinkerit/wiki/SecretVoltmeter
-  */
-  long readVcc() {
-    long result;
-    // Read 1.1V reference against AVcc
-    ADMUX = _BV(REFS0) | _BV(MUX3) | _BV(MUX2) | _BV(MUX1);
-    delay(2); // Wait for Vref to settle
-    ADCSRA |= _BV(ADSC); // Convert
-    while (bit_is_set(ADCSRA, ADSC));
-    result = ADCL;
-    result |= ADCH << 8;
-    result = 1126400L / result; // Back-calculate AVcc in mV
-    return result;
-  }
+/**
+ * Pad
+ */
+ char Pad(int value, int padding)
+ {
+  char buffer[padding];
+  char cValue[1];
+  itoa(padding, cValue,10);
+  snprintf(buffer, sizeof(buffer),"%03d", value);
+  return buffer;
+ }
 
-  /**
-     getIntervalMillis(int interval, char units)
-  */
-  unsigned long getIntervalMillis(int interval, char units)
+/**
+   readVcc
+   Reads the battery/power voltage
+   Code from https://code.google.com/p/tinkerit/wiki/SecretVoltmeter
+*/
+long readVcc() {
+  long result;
+  // Read 1.1V reference against AVcc
+  ADMUX = _BV(REFS0) | _BV(MUX3) | _BV(MUX2) | _BV(MUX1);
+  delay(2); // Wait for Vref to settle
+  ADCSRA |= _BV(ADSC); // Convert
+  while (bit_is_set(ADCSRA, ADSC));
+  result = ADCL;
+  result |= ADCH << 8;
+  result = 1126400L / result; // Back-calculate AVcc in mV
+  return result;
+}
+
+/**
+   getIntervalMillis(int interval, char units)
+*/
+unsigned long getIntervalMillis(int interval, char units)
+{
+  unsigned long intervalMillis = 0;
+  switch (units)
   {
-    unsigned long intervalMillis = 0;
-    switch (units)
-    {
-      case 'T':
-        {
-          intervalMillis = (unsigned long)interval;
-          break;
-        }
-      case 'S':
-        {
-          intervalMillis = (unsigned long)interval * 1000;
-          break;
-        }
-      case 'M':
-        {
-          intervalMillis = (unsigned long)interval * 60000;
-          break;
-        }
-      case 'H':
-        {
-          intervalMillis = (unsigned long)interval * 3600000;
-          break;
-        }
-      case 'D':
-        {
-          intervalMillis = (unsigned long)interval * 86400000;
-          break;
-        }
-      default:
-        {
-          intervalMillis = 0;
-          break;
-        }
-    }
-    return (intervalMillis);
-  }
-
-  /**
-     saveDeviceId
-     Stores DEVICEID into EEPROM
-  */
-  void saveDeviceId(char* id) {
-    char temp[2];
-    EEPROM.get(EEPROM_DEVICEID_ADDRESS, temp[0]);
-    EEPROM.get(EEPROM_DEVICEID_ADDRESS + 1, temp[1]);
-    if (id[0] != temp[0]) {
-      EEPROM.put(EEPROM_DEVICEID_ADDRESS, id[0]);
-    }
-    if (id[1] != temp[1]) {
-      EEPROM.put(EEPROM_DEVICEID_ADDRESS + 1, id[1]);
-    }
-  }
-
-  /**
-     loadDeviceId
-     Recovers DEVICEID from EEPROM
-  */
-  void loadDeviceId(char* id) {
-    EEPROM.get(EEPROM_DEVICEID_ADDRESS, id[0]);
-    EEPROM.get(EEPROM_DEVICEID_ADDRESS + 1, id[1]);
-    if (strchr_P(PSTR("-#@?\\*ABCDEFGHIJKLMNOPQRSTUVWXYZ"), id[0]) == 0 || strchr_P(PSTR("-#@?\\*ABCDEFGHIJKLMNOPQRSTUVWXYZ"), id[1]) == 0) {
-      id[0] = id[1] = '-';
-      saveDeviceId(id);
-    }
-  }
-
-  /**
-     saveCycleMode
-     Stores cycling into EEPROM
-  */
-  void saveCycleMode(boolean mode) {
-    byte temp;
-    EEPROM.get(EEPROM_CYCLE_MODE_ADDRESS, temp);
-    if (mode == true) {
-      if (temp == 0) {
-        temp = 1;
-        EEPROM.put(EEPROM_CYCLE_MODE_ADDRESS, temp);
+    case 'T':
+      {
+        intervalMillis = (unsigned long)interval;
+        break;
       }
-    }
-    else {
-      if (temp == 1) {
-        temp = 0;
-        EEPROM.put(EEPROM_CYCLE_MODE_ADDRESS, temp);
+    case 'S':
+      {
+        intervalMillis = (unsigned long)interval * 1000;
+        break;
       }
+    case 'M':
+      {
+        intervalMillis = (unsigned long)interval * 60000;
+        break;
+      }
+    case 'H':
+      {
+        intervalMillis = (unsigned long)interval * 3600000;
+        break;
+      }
+    case 'D':
+      {
+        intervalMillis = (unsigned long)interval * 86400000;
+        break;
+      }
+    default:
+      {
+        intervalMillis = 0;
+        break;
+      }
+  }
+  return (intervalMillis);
+}
+
+/**
+   saveDeviceId
+   Stores DEVICEID into EEPROM
+*/
+void saveDeviceId(char* id) {
+  char temp[2];
+  EEPROM.get(EEPROM_DEVICEID_ADDRESS, temp[0]);
+  EEPROM.get(EEPROM_DEVICEID_ADDRESS + 1, temp[1]);
+  if (id[0] != temp[0]) {
+    EEPROM.put(EEPROM_DEVICEID_ADDRESS, id[0]);
+  }
+  if (id[1] != temp[1]) {
+    EEPROM.put(EEPROM_DEVICEID_ADDRESS + 1, id[1]);
+  }
+}
+
+/**
+   loadDeviceId
+   Recovers DEVICEID from EEPROM
+*/
+void loadDeviceId(char* id) {
+  EEPROM.get(EEPROM_DEVICEID_ADDRESS, id[0]);
+  EEPROM.get(EEPROM_DEVICEID_ADDRESS + 1, id[1]);
+  if (strchr_P(PSTR("-#@?\\*ABCDEFGHIJKLMNOPQRSTUVWXYZ"), id[0]) == 0 || strchr_P(PSTR("-#@?\\*ABCDEFGHIJKLMNOPQRSTUVWXYZ"), id[1]) == 0) {
+    id[0] = id[1] = '-';
+    saveDeviceId(id);
+  }
+}
+
+/**
+   saveCycleMode
+   Stores cycling into EEPROM
+*/
+void saveCycleMode(boolean mode)
+{
+  byte temp;
+  EEPROM.get(EEPROM_CYCLE_MODE_ADDRESS, temp);
+
+  if (mode == true) {
+    if (temp != 1)
+    {
+      temp = 1;
+      //LLAP.sendInt("CYCLE+", (int)temp); // send back error status
+      EEPROM.put(EEPROM_CYCLE_MODE_ADDRESS, temp);
     }
   }
+  else {
+    if (temp != 0)
+    {
+      temp = 0;
+      //LLAP.sendInt("CYCLE+", (int)temp); // send back error status
+      EEPROM.put(EEPROM_CYCLE_MODE_ADDRESS, temp);
+    }
+  }
+}
 
-  /**
-     loadCycleMode
-     Recovers cycling from EEPROM
-  */
-  boolean loadCycleMode() {
-    boolean mode = false;
-    byte temp = 0;
-    EEPROM.get(EEPROM_CYCLE_MODE_ADDRESS, temp);
-    //LLAP.sendInt("CYCLE", (int)temp); // send back error status
-    if (temp == 1)
-    {
-      mode = true;
-    }
-    else
-    {
-      mode = false;
-    }
+/**
+   loadCycleMode
+   Recovers cycling from EEPROM
+*/
+boolean loadCycleMode()
+{
+  boolean mode = false;
+  byte temp = 0;
+  EEPROM.get(EEPROM_CYCLE_MODE_ADDRESS, temp);
+  if (temp == 1)
+  {
+    mode = true;
+  }
+  else
+  {
     mode = false;
-    return (mode);
   }
+  //LLAP.sendInt("CYCLE!", (int)temp); // send back error status
+  mode = false; // Prevent going into cycle mode while debugging
+  return (mode);
+}
 
-  /**
-     saveInterval
-     Stores interval into EEPROM
-  */
-  void saveInterval(int interval) {
-    int temp;
-    EEPROM.get(EEPROM_INTERVAL_ADDRESS, temp);
-    if (temp != interval)
-    {
-      EEPROM.put(EEPROM_INTERVAL_ADDRESS, interval);
-    }
+/**
+   saveInterval
+   Stores interval into EEPROM
+*/
+void saveInterval(int interval)
+{
+  int temp;
+  EEPROM.get(EEPROM_INTERVAL_ADDRESS, temp);
+  if (temp != interval)
+  {
+    //LLAP.sendInt("INTVL!", interval); // send back error status
+    EEPROM.put(EEPROM_INTERVAL_ADDRESS, interval);
   }
+}
 
-  /**
-     loadInterval
-     Recovers interval from EEPROM
-  */
-  int loadInterval() {
-    int interval;
-    EEPROM.get(EEPROM_INTERVAL_ADDRESS, interval);
-    //LLAP.sendInt("INTVL", interval); // send back error status
-    return (interval);
+/**
+   loadInterval
+   Recovers interval from EEPROM
+*/
+int loadInterval() {
+  int interval;
+  interval = 0;
+  EEPROM.get(EEPROM_INTERVAL_ADDRESS, interval);
+  if (interval < 0)
+  {
+    interval = 0;
   }
+  else if (interval > 999)
+  {
+    interval = 999;
+  }
+  //LLAP.sendInt("INTVL+", interval); // send back error status
+  return (interval);
+}
 
-  /**
-     saveIntervalUnits
-     Stores interval units into EEPROM
-  */
-  void saveIntervalUnits(char units) {
-    char temp;
-    EEPROM.get(EEPROM_INTERVAL_UNITS_ADDRESS, temp);
-    if (temp != units) {
-      EEPROM.put(EEPROM_INTERVAL_UNITS_ADDRESS, units);
-    }
+/**
+   saveIntervalUnits
+   Stores interval units into EEPROM
+*/
+void saveIntervalUnits(char units) {
+  char temp;
+  EEPROM.get(EEPROM_INTERVAL_UNITS_ADDRESS, temp);
+  if (temp != units) {
+    //LLAP.sendInt("UNITS!", (int)units); // send back error status
+    EEPROM.put(EEPROM_INTERVAL_UNITS_ADDRESS, units);
   }
+}
 
-  /**
-     loadIntervalUits
-     Recovers interval units from EEPROM
-  */
-  char loadIntervalUnits() {
-    char units = 'X';
-    EEPROM.get(EEPROM_INTERVAL_UNITS_ADDRESS, units);
-    //LLAP.sendInt("UNITS", (int)units); // send back error status
-    return (units);
+/**
+   loadIntervalUits
+   Recovers interval units from EEPROM
+*/
+char loadIntervalUnits() {
+  char units;
+  EEPROM.get(EEPROM_INTERVAL_UNITS_ADDRESS, units);
+  if (strchr_P(PSTR("TSMHDX"), units) == 0)  // Boundary checks
+  {
+    units = 'X';
   }
+  //LLAP.sendInt("UNITS+", (int)units); // Indicate status
+  return (units);
+}
 
-  /**
-     saveIntervalMode
-     Stores interval into EEPROM
-  */
-  void saveRetries(int retries) {
-    int temp;
-    EEPROM.get(EEPROM_RETRY_COUNTER_ADDRESS, temp);
-    if (temp != retries) {
-      EEPROM.put(EEPROM_RETRY_COUNTER_ADDRESS, retries);
-    }
+/**
+   saveIntervalMode
+   Stores interval into EEPROM
+*/
+void saveRetries(int retries) {
+  int temp;
+  EEPROM.get(EEPROM_RETRY_COUNTER_ADDRESS, temp);
+  if (temp != retries)
+  {
+    //LLAP.sendInt("RETRY!", retries); // send back error status
+    EEPROM.put(EEPROM_RETRY_COUNTER_ADDRESS, retries);
   }
+}
 
-  /**
-     loadCycleMode
-     Recovers interval from EEPROM
-  */
-  int loadRetries() {
-    int retries = 0;
-    EEPROM.get(EEPROM_RETRY_COUNTER_ADDRESS, retries);
-    //LLAP.sendInt("RETRY", retries); // send back error status
-    if ((retries <= 0) || (retries > 99)) {
-      retries = 5;
-    }
-    return (retries);
+/**
+   loadCycleMode
+   Recovers interval from EEPROM
+*/
+int loadRetries() {
+  int retries = 0;
+  EEPROM.get(EEPROM_RETRY_COUNTER_ADDRESS, retries);
+  //LLAP.sendInt("RETRY+", retries); // send back error status
+  if ((retries <= 0) || (retries > 99)) {
+    retries = 4;
   }
+  return (retries);
+}
 
-  /**
-     saveWakeCounter
-     Stores wake counter into EEPROM
-  */
-  void saveWakeCounter(int wakes) {
-    int temp;
-    EEPROM.get(EEPROM_WAKE_COUNTER_ADDRESS, temp);
-    if (temp != wakes)
-    {
-      EEPROM.put(EEPROM_WAKE_COUNTER_ADDRESS, wakes);
-    }
+/**
+   saveWakeCounter
+   Stores wake counter into EEPROM
+*/
+void saveWakeCounter(int wakes) {
+  int temp;
+  EEPROM.get(EEPROM_WAKE_COUNTER_ADDRESS, temp);
+  if (temp != wakes)
+  {
+    //LLAP.sendInt("WAKE!", wakes); // send back error status
+    EEPROM.put(EEPROM_WAKE_COUNTER_ADDRESS, wakes);
   }
+}
 
-  /**
-     loadWakeCounter
-     Recovers wake counter from EEPROM
-  */
-  int loadWakeCounter() {
-    int wakes = 0;
-    EEPROM.get(EEPROM_WAKE_COUNTER_ADDRESS, wakes);
-    //LLAP.sendInt("WAKES", wakes); // send back error status
-    if ((wakes <= 0) || (wakes > 999)) {
-      wakes = 10;
-    }
-    return (wakes);
+/**
+   loadWakeCounter
+   Recovers wake counter from EEPROM
+*/
+int loadWakeCounter() {
+  int wakes = 0;
+  EEPROM.get(EEPROM_WAKE_COUNTER_ADDRESS, wakes);
+  //LLAP.sendInt("WAKE+", wakes); // send back error status
+  if ((wakes <= 0) || (wakes > 999)) {
+    wakes = 10;
   }
+  return (wakes);
+}

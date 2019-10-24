@@ -45,7 +45,7 @@ enum class State
 //
 
 char deviceId[2];                     // The device Id
-byte battc = 9;			              // Set the initial counter to 9 so will do battery next as count in incremented first
+byte battc = 9;			      // Set the initial counter to 9 so will do battery next as count in incremented first
 boolean cycling = false;              // Indicated that cycling
 int interval = 0;                     // number of intervals in the chosen units T - Milliseconds, S - Seconds, M - Minutes, H - Hours, D - Days
 char units = 'X';                     // period units
@@ -58,11 +58,11 @@ int wakeCounter = 0;                  // The number of messages sent before a wa
 
 // Device data, this can be storred in program memory
 
-const String deviceName PROGMEM = "ENERGYMON";  // The Device friendly naem
-const String deviceType PROGMEM = "U00000002";  // The user defined device type
-const int version PROGMEM = 100;                // LLAP version
-const int firmware PROGMEM = 100;               // Manufacturer firmware version
-const String serialNumber PROGMEM = "123456";   // Device Serial Number
+const char deviceName[] PROGMEM = {"ENERGYMON"};  // The Device friendly naem
+const char deviceType[] PROGMEM = "U00000002";    // The user defined device type
+const int version PROGMEM = 100;                  // LLAP version
+const int firmware PROGMEM = 100;                 // Manufacturer firmware version
+const char serialNumber[] PROGMEM = "123456";     // Device Serial Number
 
 // Instantiate the Serial, sleeper and Emon classes
 
@@ -264,14 +264,14 @@ void loop() {
               LLAP.sendMessage(F("CYCLE")); // echo beck the instruction
               LLAP.bMsgReceived = false;
             }
-            else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("DEVNAME"), 7) == 0) // Device type
+            else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("DEVNAME"), 7) == 0) // Device name
             {
               LLAP.sendMessage(deviceName); // echo beck the device friendly name
               LLAP.bMsgReceived = false;
             }
-            else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("DEVTYPE"), 7) == 0) // Battery voltage
+            else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("DEVTYPE"), 7) == 0) // Device type
             {
-              LLAP.sendMessage(deviceType); // echo beck the device friendly name
+              LLAP.sendMessage(deviceType); // echo beck the device friendly type
               LLAP.bMsgReceived = false;
             }
             else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("FVER"), 4) == 0) // manufacturer firmware version
@@ -279,9 +279,8 @@ void loop() {
               LLAP.sendIntWithDP("FVER", firmware, 2);
               LLAP.bMsgReceived = false;
             }
-            else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("HELLO"), 5) == 0) // Wake from the sleep cycle
+            else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("HELLO"), 5) == 0) // Ping Message respond back
             {
-              // Echo back
               LLAP.sendMessage(F("HELLO")); // echo beck the instruction
               LLAP.bMsgReceived = false;
             }
@@ -364,7 +363,7 @@ void loop() {
               timeout = getIntervalMillis(interval, units);
               deviceState = State::Initiated;
             }
-            else
+            else  // Any other commands send an error back
             {
               // Echo back
               LLAP.sendMessage(F("ERRROR999")); // send back error status
@@ -377,7 +376,7 @@ void loop() {
             if (timeout > 0) {
               unsigned long currentMillis = millis();
               if (currentMillis - previousMillis >= timeout) {
-	              LLAP.sendIntWithDP("PWR", int(readPower()), 3);   // read the power and output as kilowatts PWRA1.234
+	        LLAP.sendIntWithDP("PWR", int(readPower()), 3);   // read the power and output as kilowatts PWRA1.234
                 previousMillis = currentMillis;
 
                 if (cycling == true){
