@@ -10,9 +10,8 @@
 
 
 #include <LLAPSerial.h>
-#include <Sleeper.h>
+//#include <Sleeper.h>
 #include <EEPROM.h>
-#include <avr/wdt.h>
 
 #define EEPROM_DEVICEID_ADDRESS 500       // Address where the two byte DEVICEID is stored
 #define HEARTBEATINTERVAL 60000           // time in ms beween heatbeats so 60 seconds
@@ -71,12 +70,12 @@ const char serialNumber[] = "123456";   // Device Serial Number
 int limit = 512;                                // Default to 512 out if 1024
 int total = 0;                                  // A count of events
 bool trigger = false;                           // Start of interruption teigger
-int pin = A1;                                   // The reading pin
+int pin = A0;                                   // The reading pin
 
 // Instantiate the Serial and sleeper classes
 
 LLAPSerial LLAP;
-Sleeper sleeper;
+//Sleeper sleeper;
 
 /*
   SerialEvent occurs whenever a new data comes in the
@@ -204,13 +203,13 @@ void loop() {
             long iterations = timeout / 60000;
             for (long i = 0; i < iterations; i++)
             {
-              sleeper.sleepForaWhile(60000);
+              //sleeper.sleepForaWhile(60000);
             }
-            sleeper.sleepForaWhile(timeout - iterations * 60000); // Adjust for any remainder
+            //sleeper.sleepForaWhile(timeout - iterations * 60000); // Adjust for any remainder
           }
           else
           {
-            sleeper.sleepForaWhile(timeout);
+            //sleeper.sleepForaWhile(timeout);
           }
           deviceState = State::Updating;
         }
@@ -574,6 +573,7 @@ void loop() {
  bool checkAnalog(int threshold, int &count, bool &trigger) {
   long result = false;
   int sensorValue = analogRead(pin);
+  threshold=35;
   //Serial.println(sensorValue);
   if (sensorValue > threshold) {
     //delay(1);
