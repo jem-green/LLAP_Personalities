@@ -21,7 +21,7 @@
 #define EEPROM_INTERVAL_UNITS_ADDRESS 507 // Address where the single char UNITS is stored 
 #define EEPROM_WAKE_COUNTER_ADDRESS 508   // Address where the double byte WAKEC is stored
 #define EEPROM_RETRY_COUNTER_ADDRESS 510  // Address where the double byte RETRIES is stored
-#define EEPROM_LIMIT_ADDRESS 511          // Address where the four byte limit is stored
+#define EEPROM_LIMIT_ADDRESS 511          // Address where the four byte threshold is stored
 
 
 // State model to keep track of where we are
@@ -68,7 +68,7 @@ const char serialNumber[] = "123456";   // Device Serial Number
 
 // Specific to the interrupter
 
-int limit = 512;                                // Default to 512 out if 1024
+int threshold = 512;                                // Default to 512 out if 1024
 int total = 0;                                  // A count of events
 bool trigger = false;                           // Start of interruption teigger
 int pin = A1;                                   // The reading pin
@@ -97,8 +97,8 @@ void setup() {
   pinMode(8, OUTPUT);               // initialize pin 8 to control the radio
   digitalWrite(8, HIGH);            // select the radio
 
-  //pinMode(4, OUTPUT);               // pin 4 controls the radio sleep
-  //digitalWrite(4, LOW);             // wake the radio
+  //pinMode(4, OUTPUT);             // pin 4 controls the radio sleep
+  //digitalWrite(4, LOW);           // wake the radio
 
   delay(450);                       // allow the radio to startup
 
@@ -126,7 +126,7 @@ void setup() {
   }
 
   LLAP.bMsgReceived == false;
-  pinMode(13, OUTPUT);            // initialize pin 13 as digital output (LED)
+  pinMode(13, OUTPUT);              // initialize pin 13 as digital output (LED)
 }
 
 // APVER - LLAP version
@@ -150,7 +150,7 @@ void setup() {
 // aXXLIMIT12345
 // aXXCOUNT12345
 //
-// LIMIT - Threshold limit before trggering so aXXLIMIT1234- - values 0 to 1023
+// LIMIT - Threshold threshold before trggering so aXXLIMIT1234- - values 0 to 1023
 // COUNT - Count of events or just the event within each timout so aXXCOUNT12345 -> values 0 to 99999 
 
 void loop() {
@@ -483,27 +483,27 @@ void loop() {
             timeout = getIntervalMillis(interval, units);
             deviceState = State::Initiated;
           }
-	        else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("LIMIT"), 5) == 0) // Set the threhold limit value 0 to 1023
+	        else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("THRES"), 5) == 0) // Set the threhold limit value 0 to 1023
           {
-            // LIMIT-----
-            // LIMITnnnn-
+            // THRESH-----
+            // THRESHnnnn-
             // 0123456789
             // need to do some better checks here, padding problems etc
             if (LLAP.sMessage.c_str()[5] != 45) {
               int digit;
-              limit = 0;
+              threshold = 0;
               for (byte i = 5; i < 9; i++) {
                 digit = (int)LLAP.sMessage.c_str()[i] - 48;
                 if ((digit < 0) || (digit > 9)) {
                   digit = 0;
                 }
-                limit = 10 * limit + digit;
+                threshold = 10 * threshold + digit;
               }
-              saveLimit(limit);
+              saveThreshold(threshold);
             }
             // Echo back
-            limit = loadLimit();
-            LLAP.sendInt("LIMIT", limit); // echo back the instruction
+            threshold = loadThreshold();
+            LLAP.sendInt("THRES", threshold); // echo back the instruction
             LLAP.bMsgReceived = false;
           }
           else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("VAL"), 3) == 0) // Get the photo interrupter value 0 to 1023
@@ -544,12 +544,12 @@ void loop() {
               previousMillis = currentMillis;
             }
             else {
-              checkAnalog(limit, total, trigger);
+              checkAnalog(threshold, total, trigger);
             }
           }
 	        else {
             // calculate sumations
-            if (checkAnalog(limit, total, trigger)){
+            if (checkAnalog(threshold, total, trigger)){
               LLAP.sendInt("COUNT", total); // echo back the instruction
               total = 0;
             }
@@ -577,18 +577,18 @@ void loop() {
   //Serial.println(sensorValue);
   if (sensorValue > threshold) {
     //delay(1);
-    //Serial.println(sensorValue);
+    Serial.println(sensorValue);
     if (trigger == false) {
-      //Serial.println("start");
+      Serial.println("start");
       // start monitoring for end of bubble
       trigger = true;
-      //Serial.println(sensorValue);
+      Serial.println(sensorValue);
     }
   }
   else {
     if (trigger == true) {
-      //Serial.println(sensorValue);
-      //Serial.println("end");
+      Serial.println(sensorValue);
+      Serial.println("end");
       // Looks like the end of a bubble
       count = count + 1;
       result = true;
@@ -749,9 +749,9 @@ boolean loadCycleMode()
 
 /**
    saveLimit
-   Stores limit into EEPROM
+   Stores threshold into EEPROM
 */
-void saveLimit(int threshold)
+void saveThreshold(int threshold)
 {
   int temp;
   EEPROM.get(EEPROM_LIMIT_ADDRESS, temp);
@@ -764,22 +764,22 @@ void saveLimit(int threshold)
 
 /**
    loadLimit
-   Recovers limit from EEPROM
+   Recovers threshold from EEPROM
 */
-int loadLimit() {
-  int limit;
-  limit = 0;
-  EEPROM.get(EEPROM_LIMIT_ADDRESS, limit);
-  if (limit < 0)
+int loadThreshold() {
+  int threshold;
+  threshold = 0;
+  EEPROM.get(EEPROM_LIMIT_ADDRESS, threshold);
+  if (threshold < 0)
   {
-    limit = 0;
+    threshold = 0;
   }
-  else if (limit > 1023)
+  else if (threshold > 1023)
   {
-    limit = 1023;
+    threshold = 1023;
   }
-  //LLAP.sendInt("LIMIT+", limit); // send back error status
-  return (limit);
+  //LLAP.sendInt("LIMIT+", threshold); // send back error status
+  return (threshold);
 }
 
 /**
