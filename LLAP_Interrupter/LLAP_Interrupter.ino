@@ -62,13 +62,13 @@ bool woken = false;                   // Indicate that woken
 
 const char deviceName[] = "INTERRUPT";  // The Device friendly name
 const char deviceType[] = "INTRPT001";  // The user defined device type
-const int version PROGMEM = 100;                // LLAP version
-const int firmware PROGMEM = 100;               // Manufacturer firmware version
+const int version PROGMEM = 100;        // LLAP version
+const int firmware PROGMEM = 100;       // Manufacturer firmware version
 const char serialNumber[] = "123456";   // Device Serial Number
 
 // Specific to the interrupter
 
-int threshold = 512;                                // Default to 512 out if 1024
+int threshold = 512;                            // Default to 512 out if 1024
 int total = 0;                                  // A count of events
 bool trigger = false;                           // Start of interruption teigger
 int pin = A1;                                   // The reading pin
@@ -238,12 +238,12 @@ void loop() {
           else
           {
             timeout = getIntervalMillis(interval, units);   // reset the timeout just-in-case
-            deviceState = State::Initiated;                  // Now back to sleeping
+            deviceState = State::Initiated;                 // Now back to sleeping
           }
         }
         else
         {
-          LLAP.sendMessage(F("AWAKE"));                   // send back error status
+          LLAP.sendMessage(F("AWAKE"));                     // send back error status
           timeout = getIntervalMillis(interval, units);     // reset the timeout just-in-case
           deviceState = State::Initiated;                   // This was to fix a problem when cycling was true and interval was zero
         }
@@ -414,6 +414,7 @@ void loop() {
           else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("SER"), 3) == 0) // Get the device serial number
           {
             // SER-------
+            // SERnnnnn
             // 0123456789 
             LLAP.sendMessage("SER", serialNumber);
             LLAP.bMsgReceived = false;

@@ -82,7 +82,7 @@ void setup() {
 
   deviceState = State::Unknown;
 
-  Serial.begin(9600);
+  Serial.begin(115200);
 
   pinMode(8, OUTPUT);               // initialize pin 8 to control the radio
   digitalWrite(8, HIGH);            // select the radio
@@ -116,7 +116,7 @@ void setup() {
   }
 
   LLAP.bMsgReceived == false;
-  pinMode(13, OUTPUT);            // initialize pin 13 as digital output (LED)
+  pinMode(13, OUTPUT);              // initialize pin 13 as digital output (LED)
 }
 
 // APVER - LLAP version
@@ -207,6 +207,7 @@ void loop() {
         {
           battc++;
           if (battc >= wakeCounter) {                       // is it time to send a battery reading
+
             battc = 0;                                      // restart the counter
             voltage = readVcc();                            // read the battery voltage
             LLAP.sendMessage(F("AWAKE"));                   // send back error status
@@ -219,12 +220,12 @@ void loop() {
           else
           {
             timeout = getIntervalMillis(interval, units);   // reset the timeout just-in-case
-            deviceState = State::Initiated;                  // Now back to sleeping
+            deviceState = State::Initiated;                 // Now back to sleeping
           }
         }
         else
         {
-          LLAP.sendMessage(F("AWAKE"));                   // send back error status
+          LLAP.sendMessage(F("AWAKE"));                     // send back error status
           timeout = getIntervalMillis(interval, units);     // reset the timeout just-in-case
           deviceState = State::Initiated;                   // This was to fix a problem when cycling was true and interval was zero
         }
@@ -351,8 +352,8 @@ void loop() {
             interval = loadInterval();
             units = loadIntervalUnits();
             timeout = getIntervalMillis(interval, units);
-              // Echo back
-              LLAP.sendInt("INTVL", interval); // echo back the instruction
+            // Echo back
+            LLAP.sendIntWithTerminator("INTVL",interval,3,units); // echo back the instruction
             previousMillis = millis();        // Set the initial values
             LLAP.bMsgReceived = false;
           }
@@ -389,7 +390,7 @@ void loop() {
               saveRetries(startedRetries);
             }
             retries = loadRetries();
-              LLAP.sendInt("RETRIES", retries);
+            LLAP.sendIntWithPad("RETRIES", retries,2);
             LLAP.bMsgReceived = false;
           }
           else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("SER"), 3) == 0) // Get the device serial number
@@ -406,7 +407,7 @@ void loop() {
             // SLEEPnnna-
             // 0123456789 
              
-            if (LLAP.sMessage.c_str()[7] != 45) {
+            if (LLAP.sMessage.c_str()[5] != 45) {
               // need to do some better checks here, padding problems etc
               int digit;
               int sleepInterval = 0;
@@ -435,8 +436,10 @@ void loop() {
           {
             // WAKEC-----
             // WAKECnnn--
-            // 0123456789 
-            if (LLAP.sMessage.c_str()[7] != 45) {
+            // 0123456789
+            // 
+            
+            if (LLAP.sMessage.c_str()[5] != 45) {
               int digit;
               int counter = 0;
               for (byte i = 5; i < 8; i++) {
@@ -450,7 +453,7 @@ void loop() {
               saveWakeCounter(counter);
             }
             wakeCounter = loadWakeCounter();
-              LLAP.sendInt("WAKEC", wakeCounter); // echo back the instruction
+            LLAP.sendIntWithPad("WAKEC", wakeCounter,3); // echo back the instruction
             LLAP.bMsgReceived = false;
           }
           else if (strncmp_P(LLAP.sMessage.c_str(), PSTR("WAKE"), 4) == 0) // Wake from the sleep cycle
