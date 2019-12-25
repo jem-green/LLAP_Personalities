@@ -57,11 +57,11 @@ bool woken = false;                   // Indicate that woken
 
 // Device data, this can be storred in program memory
 
-const char deviceName[] PROGMEM = "HEARTBEAT";  // The Device friendly name
-const char deviceType[] PROGMEM = "HRTBT001";   // The user defined device type
-const int version PROGMEM = 100;                // LLAP version
-const int firmware PROGMEM = 100;               // Manufacturer firmware version
-const char serialNumber[] PROGMEM = "123456";   // Device Serial Number
+const char deviceName[] = {"HEARTBEAT"};  // The Device friendly name
+const char deviceType[] = {"HRTBT001"};   // The user defined device type
+const int version = 100;                  // LLAP version
+const int firmware = 100;                 // Manufacturer firmware version
+const char serialNumber[] = {"123456"};   // Device Serial Number
 
 // Instantiate the Serial and sleeper classes
 
@@ -348,7 +348,6 @@ void loop() {
               saveIntervalUnits(sleepUnits);
             }
             
-            // Echo back
             interval = loadInterval();
             units = loadIntervalUnits();
             timeout = getIntervalMillis(interval, units);
@@ -425,7 +424,7 @@ void loop() {
               timeout = getIntervalMillis(sleepInterval, sleepUnits);
               if (timeout > 0) {
                 // Echo back
-                LLAP.sendMessage(F("SLEEP")); // echo back the instruction
+                LLAP.sendIntWithTerminator("SLEEP",sleepInterval,3,sleepUnits); // echo back the instruction
                 deviceState = State::Sleeping;
                 LLAP.sendMessage(F("SLEEPING")); // echo back the instruction
               }
